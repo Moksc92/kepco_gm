@@ -90,8 +90,6 @@ function performClustering(points) {
 
 // App Initialization
 document.addEventListener('DOMContentLoaded', () => {
-    // Show login modal by default (it's in HTML structure)
-    // Setup login listener
     const loginForm = document.getElementById('login-form');
     loginForm.addEventListener('submit', handleLogin);
 });
@@ -119,27 +117,21 @@ async function handleLogin(e) {
     }
 
     // Success
-    // Hide Modal
     document.getElementById('login-modal').classList.add('hidden');
-
-    // Fetch Data
     await loadData();
-
-    // Init App
     initMap();
 }
 
+async function handleLogout() {
+    const { error } = await supabaseClient.auth.signOut();
+    if (error) {
+        console.error('Logout error:', error);
+    }
+    // Simple reload to reset everything
+    window.location.reload();
+}
+
 async function loadData() {
-    // Requirement: fetch from 'poles' table
-    // Adjusting column names to match what likely exists or mapping them
-    // Assuming the table columns match the CSV structure we used or are mapped.
-    // Since I don't know the exact schema of 'poles' table in Supabase,
-    // I will try to select '*' and map accordingly.
-
-    // If the user hasn't specified schema, I hope it matches.
-    // But since this is a "Demo" context, I'll assume the table exists and fields match.
-    // If not, this might fail, but I must follow instructions: "supabase.from('poles').select('*')"
-
     const { data, error } = await supabaseClient
         .from('poles')
         .select('*');
@@ -149,15 +141,6 @@ async function loadData() {
         alert('데이터를 가져오는 중 오류가 발생했습니다.');
         return;
     }
-
-    // Process data to match our app's internal format
-    // App expects: { lat, lng, zone, line, id, addr, circuit, line_num }
-    // I'll assume the DB columns are snake_case English or matching.
-    // Let's assume standard keys for now. If they are Korean in DB, I might need to map.
-    // Given the previous CSV had Korean headers, maybe the DB has them too?
-    // "supabase.from('poles')" suggests a new table. 
-    // Usually DBs use English columns. 
-    // I'll map loosely.
 
     state.poles = data.map(item => ({
         lat: item.lat || item.위도 || 0,
@@ -201,10 +184,9 @@ function setupAppEventListeners() {
     });
 
     document.getElementById('btn-download').addEventListener('click', downloadCSV);
-}
 
-// ... (Rest of functions: downloadCSV, populateZoneFilter, updateLineList, applyFilters, renderPoints, etc.)
-// Copying them from previous app.js to ensure functionality is preserved.
+    document.getElementById('btn-logout').addEventListener('click', handleLogout);
+}
 
 function downloadCSV() {
     const data = state.visiblePoles;
@@ -249,7 +231,7 @@ function downloadCSV() {
 function populateZoneFilter() {
     const zones = new Set(state.poles.map(p => p.zone).filter(z => z));
     const select = document.getElementById('zone-select');
-    select.innerHTML = '<option value="all">All Zones</option>'; // Reset
+    select.innerHTML = '<option value="all">All Zones</option>';
     const sortedZones = Array.from(zones).sort();
 
     sortedZones.forEach(zone => {
@@ -261,60 +243,83 @@ function populateZoneFilter() {
 }
 
 function updateLineList(searchTerm = '') {
+    // Grouped Filtering Update
     let relevantPoles = state.poles;
     if (state.selectedZone !== 'all') {
         relevantPoles = relevantPoles.filter(p => p.zone === state.selectedZone);
     }
 
-    const lines = new Set(relevantPoles.map(p => p.line).filter(l => l));
-    const sortedLines = Array.from(lines).sort();
-    const displayLines = sortedLines.filter(l => l.toLowerCase().includes(searchTerm.toLowerCase()));
+    // Group lines by Zone
+    const groupedLines = {};
+    relevantPoles.forEach(p => {
+        if (!p.line) return;
+        if (!groupedLines[p.zone]) groupedLines[p.zone] = new Set();
+        groupedLines[p.zone].add(p.line);
+    });
+
+    // Sort Zones (Headers)
+    const sortedZones = Object.keys(groupedLines).sort();
 
     const lineListContainer = document.getElementById('line-list');
     lineListContainer.innerHTML = '';
 
     const fragment = document.createDocumentFragment();
 
-    if (displayLines.length === 0) {
-        lineListContainer.innerHTML = '<div style="padding:10px; color:#64748b; font-size:0.9rem;">No lines found</div>';
-        return;
-    }
+    sortedZones.forEach(zone => {
+        // Collect Lines for this zone
+        const lines = Array.from(groupedLines[zone]).sort();
+        // Filter lines by search term
+        const visibleLines = lines.filter(l => l.toLowerCase().includes(searchTerm.toLowerCase()));
 
-    displayLines.forEach(line => {
-        const div = document.createElement('div');
-        div.className = 'line-item';
+        if (visibleLines.length > 0) {
+            // Group Header
+            const header = document.createElement('div');
+            header.className = 'zone-group-header';
+            header.textContent = zone;
+            fragment.appendChild(header);
 
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.checked = !state.hiddenLines.has(line);
-        checkbox.dataset.line = line;
+            // Lines
+            visibleLines.forEach(line => {
+                const div = document.createElement('div');
+                div.className = 'line-item';
 
-        checkbox.addEventListener('change', (e) => {
-            if (e.target.checked) {
-                state.hiddenLines.delete(line);
-            } else {
-                state.hiddenLines.add(line);
-            }
-            applyFilters();
-        });
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.checked = !state.hiddenLines.has(line);
+                checkbox.dataset.line = line;
 
-        const label = document.createElement('span');
-        label.textContent = line;
+                checkbox.addEventListener('change', (e) => {
+                    if (e.target.checked) {
+                        state.hiddenLines.delete(line);
+                    } else {
+                        state.hiddenLines.add(line);
+                    }
+                    applyFilters();
+                });
 
-        div.appendChild(checkbox);
-        div.appendChild(label);
+                const label = document.createElement('span');
+                label.textContent = line;
 
-        div.addEventListener('click', (e) => {
-            if (e.target !== checkbox) {
-                checkbox.checked = !checkbox.checked;
-                checkbox.dispatchEvent(new Event('change'));
-            }
-        });
+                div.appendChild(checkbox);
+                div.appendChild(label);
 
-        fragment.appendChild(div);
+                div.addEventListener('click', (e) => {
+                    if (e.target !== checkbox) {
+                        checkbox.checked = !checkbox.checked;
+                        checkbox.dispatchEvent(new Event('change'));
+                    }
+                });
+
+                fragment.appendChild(div);
+            });
+        }
     });
 
-    lineListContainer.appendChild(fragment);
+    if (fragment.childElementCount === 0) {
+        lineListContainer.innerHTML = '<div style="padding:10px; color:#64748b; font-size:0.9rem;">No lines found</div>';
+    } else {
+        lineListContainer.appendChild(fragment);
+    }
 }
 
 function applyFilters() {
@@ -329,7 +334,6 @@ function applyFilters() {
 
 function createPopupContent(cluster) {
     const points = cluster.points;
-
     let html = `
         <div class="popup-header">
             <h3>${cluster.line}</h3>
