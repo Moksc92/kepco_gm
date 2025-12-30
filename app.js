@@ -3,7 +3,7 @@ const SUPABASE_URL = 'https://crmgocruuhldfujfdech.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNybWdvY3J1dWhsZGZ1amZkZWNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjcwNzQ1MTQsImV4cCI6MjA4MjY1MDUxNH0.ZdvfbMLdt9mdSIePlwjST9SkeWB2Ih4aHK6Egv0FfN4';
 
 // Initialize Supabase
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // State
 const state = {
@@ -106,7 +106,7 @@ async function handleLogin(e) {
     btn.disabled = true;
     btn.textContent = 'Logging in...';
 
-    const { data, error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
         email: email,
         password: password
     });
@@ -140,7 +140,7 @@ async function loadData() {
     // But since this is a "Demo" context, I'll assume the table exists and fields match.
     // If not, this might fail, but I must follow instructions: "supabase.from('poles').select('*')"
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
         .from('poles')
         .select('*');
 
