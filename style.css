@@ -294,7 +294,6 @@ body {
     font-size: 0.9rem;
     user-select: none;
     margin-left: 4px;
-    /* Indent slightly under group */
 }
 
 .line-item:hover {
