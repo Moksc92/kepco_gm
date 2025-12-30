@@ -6,9 +6,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pole Map Visualization</title>
 
-    <!-- Supabase JS Client (UMD for local execution) -->
-    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -18,12 +15,11 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 
-    <!-- Leaflet MarkerCluster CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
-
     <!-- Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Supabase JS -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
     <!-- Custom CSS -->
     <link rel="stylesheet" href="style.css">
@@ -33,26 +29,30 @@
 
     <!-- Login Modal -->
     <div id="login-modal" class="modal-overlay">
-        <div class="modal-content glass-panel">
+        <div class="login-card glass-panel">
             <div class="login-header">
-                <img src="한국전력공사_로고-removebg-preview.png" alt="KEPCO Logo" class="login-logo">
+                <img src="한국전력공사_로고-removebg-preview.png" alt="Kepco Logo" class="login-logo">
                 <h2>광명지사</h2>
+                <p>Pole Map Login</p>
             </div>
             <form id="login-form">
                 <div class="input-group">
-                    <i class="fa-solid fa-envelope"></i>
-                    <input type="email" id="email" placeholder="Email" required>
+                    <label for="email"><i class="fa-solid fa-envelope"></i> Email</label>
+                    <input type="email" id="email" placeholder="name@example.com" required>
                 </div>
                 <div class="input-group">
-                    <i class="fa-solid fa-lock"></i>
+                    <label for="password"><i class="fa-solid fa-lock"></i> Password</label>
                     <input type="password" id="password" placeholder="Password" required>
                 </div>
-                <button type="button" id="login-btn" class="btn-login">Sign In</button>
+                <button type="submit" class="btn-primary btn-login">
+                    Login
+                </button>
             </form>
         </div>
     </div>
 
-    <div id="app" style="display:none;"> <!-- Hidden by default until login -->
+    <!-- Main App (Hidden by default or covered by modal) -->
+    <div id="app">
         <!-- Sidebar Control Panel -->
         <aside class="sidebar glass-panel">
             <div class="sidebar-header">
@@ -97,11 +97,6 @@
                 <button id="btn-download" class="btn-primary">
                     <i class="fa-solid fa-download"></i> Download CSV
                 </button>
-                <!-- Optional Logout Button -->
-                <button id="btn-logout" class="btn-secondary"
-                    style="margin-top:10px; width:100%; padding:10px; background:rgba(255,255,255,0.1); border:none; color:#aaa; border-radius:8px; cursor:pointer;">
-                    <i class="fa-solid fa-right-from-bracket"></i> Logout
-                </button>
             </div>
         </aside>
 
@@ -115,10 +110,9 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 
-    <!-- Leaflet MarkerCluster JS -->
-    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+    <!-- POIS.JS Removed -->
 
-    <!-- App Logic (Removed pois.js) -->
+    <!-- App Logic -->
     <script src="app.js"></script>
 </body>
 
