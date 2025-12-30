@@ -180,24 +180,25 @@ async function loadData() {
         const { data, error } = await supabaseClient.from('poles').select('*');
         if (error) throw error;
 
-        // FIXED: Mapping Korean columns
+        // Requirement 3: Silent Debug Log
+        if (data.length > 0) {
+            console.log('첫 번째 데이터 샘플:', data[0]);
+        }
+
+        // Requirement 1 & 2: Enhanced Mapping
         const mappedData = data.map(row => ({
             id: row['전산화번호'],
             lat: parseFloat(row['위도']),
             lng: parseFloat(row['경도']),
             line: row['회선명'],
-            zone: row['구역명'] || row['구역'] || 'Unknown',
+            // Try user suggested '구역(4본부)', then known '구역(4등분)', then general '구역'
+            zone: row['구역(4본부)'] || row['구역(4등분)'] || row['구역'] || row['구역명'] || 'Unknown',
             // Store original for popup details
             info: row
         }));
 
         // Filter valid coordinates
         state.poles = mappedData.filter(p => !isNaN(p.lat) && !isNaN(p.lng) && p.lat !== 0 && p.lng !== 0);
-
-        // Debug first item
-        if (state.poles.length > 0) {
-            console.log('Mapped Data Example:', state.poles[0]);
-        }
 
         state.visiblePoles = [...state.poles];
 
