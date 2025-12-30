@@ -1,348 +1,212 @@
-// State
-const state = {
-    selectedZone: 'all',
-    hiddenLines: new Set(),
-    poles: [],
-    visiblePoles: [],
-    currentClusters: [], // Store clusters to count them
-    map: null,
-    layers: {
-        points: null,
-        clusters: null
-    }
-};
+// 1. Supabase 설정 (고객님 프로젝트 정보)
+const supabaseUrl = 'https://crmgocruuhldfujfdech.supabase.co';
+const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNybWdvY3J1dWhsZGZ1amZkZWNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjcwNzQ1MTQsImV4cCI6MjA4MjY1MDUxNH0.ZdvfbMLdt9mdSIePlwjST9SkeWB2Ih4aHK6Egv0FfN4';
+const supabase = supabase.createClient(supabaseUrl, supabaseKey);
 
-const CONFIG = {
-    clusterDistance: 50, // meters
-    defaultCenter: [37.45, 126.85],
-    defaultZoom: 13
-};
+// 2. 전역 변수 설정
+let map;
+let markers; // 클러스터 그룹
+let allData = []; // DB에서 가져온 전체 데이터
 
-// Utils
-function getDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371e3;
-    const φ1 = lat1 * Math.PI / 180;
-    const φ2 = lat2 * Math.PI / 180;
-    const Δφ = (lat2 - lat1) * Math.PI / 180;
-    const Δλ = (lon2 - lon1) * Math.PI / 180;
-
-    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-        Math.cos(φ1) * Math.cos(φ2) *
-        Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-    return R * c;
-}
-
-function performClustering(points) {
-    const clusters = [];
-
-    // Group by line first for "same line" requirement
-    const byLine = {};
-    points.forEach((p) => {
-        if (!byLine[p.line]) byLine[p.line] = [];
-        byLine[p.line].push(p);
-    });
-
-    Object.keys(byLine).forEach(lineName => {
-        const linePoints = byLine[lineName];
-        const visited = new Set(); // index based
-
-        for (let i = 0; i < linePoints.length; i++) {
-            if (visited.has(i)) continue;
-
-            const current = linePoints[i];
-            const cluster = {
-                lat: current.lat,
-                lng: current.lng,
-                count: 1,
-                line: lineName,
-                // Store ALL points in the cluster for the detail view
-                points: [current]
-            };
-            visited.add(i);
-
-            for (let j = i + 1; j < linePoints.length; j++) {
-                if (visited.has(j)) continue;
-
-                const neighbor = linePoints[j];
-                const dist = getDistance(current.lat, current.lng, neighbor.lat, neighbor.lng);
-
-                if (dist <= CONFIG.clusterDistance) {
-                    const newCount = cluster.count + 1;
-                    // Weighted average for center
-                    cluster.lat = (cluster.lat * cluster.count + neighbor.lat) / newCount;
-                    cluster.lng = (cluster.lng * cluster.count + neighbor.lng) / newCount;
-                    cluster.count = newCount;
-                    cluster.points.push(neighbor);
-                    visited.add(j);
-                }
-            }
-            clusters.push(cluster);
-        }
-    });
-
-    return clusters;
-}
-
-// App Logic
+// 3. 앱 시작 (HTML 로딩 완료 후)
 document.addEventListener('DOMContentLoaded', () => {
-    initApp();
+    // 로그인 버튼 이벤트
+    const loginBtn = document.getElementById('login-btn');
+    if (loginBtn) {
+        loginBtn.addEventListener('click', handleLogin);
+        // 엔터키 로그인 지원
+        document.getElementById('password').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') handleLogin();
+        });
+    }
 });
 
-function initApp() {
-    state.poles = POLE_DATA;
-    state.visiblePoles = [...state.poles];
+// 4. 로그인 처리
+async function handleLogin() {
+    const email = document.getElementById('email').value;
+    const password = document.getElementById('password').value;
 
-    // Init Map
-    state.map = L.map('map').setView(CONFIG.defaultCenter, CONFIG.defaultZoom);
+    try {
+        const { data, error } = await supabase.auth.signInWithPassword({
+            email: email,
+            password: password
+        });
+
+        if (error) throw error;
+
+        // 로그인 성공 UI 처리
+        document.getElementById('login-modal').style.display = 'none';
+        document.getElementById('app').style.display = 'flex';
+        
+        // 지도 및 데이터 로드 시작
+        initMap();
+        fetchAndMapData();
+
+    } catch (err) {
+        alert('로그인 실패: ' + err.message);
+    }
+}
+
+// 5. 지도 초기화
+function initMap() {
+    // 맵 생성 (초기 위치: 광명)
+    map = L.map('map').setView([37.47, 126.88], 13);
+    
+    // 어두운 테마 지도 타일
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; OpenStreetMap &copy; CARTO',
         subdomains: 'abcd',
         maxZoom: 20
-    }).addTo(state.map);
+    }).addTo(map);
 
-    populateZoneFilter();
-    updateLineList();
-    renderPoints(); // This will also update stats
+    // 마커 클러스터 그룹 생성 (50m 근처 뭉치기 효과)
+    markers = L.markerClusterGroup({
+        disableClusteringAtZoom: 18 // 아주 가까이 가면 뭉치기 해제
+    });
+    map.addLayer(markers);
 
-    setupEventListeners();
+    // 지도 깨짐 방지
+    setTimeout(() => map.invalidateSize(), 200);
 }
 
-function setupEventListeners() {
-    document.getElementById('zone-select').addEventListener('change', (e) => {
-        state.selectedZone = e.target.value;
-        state.hiddenLines.clear();
-        updateLineList();
-        applyFilters();
-    });
+// 6. 데이터 가져오기 및 매핑 (★가장 중요한 부분★)
+async function fetchAndMapData() {
+    try {
+        // Supabase에서 데이터 가져오기
+        let { data, error } = await supabase
+            .from('poles')
+            .select('*')
+            .limit(10000); // 넉넉하게 제한 해제
 
-    document.getElementById('line-search').addEventListener('input', (e) => {
-        updateLineList(e.target.value);
-    });
+        if (error) throw error;
 
-    document.getElementById('btn-download').addEventListener('click', downloadCSV);
-}
+        // ★ 데이터 이름표 바꿔주기 (한글 컬럼 -> 영어 변수)
+        allData = data.map(row => {
+            return {
+                id: row['전산화번호'],
+                lat: parseFloat(row['위도']),
+                lng: parseFloat(row['경도']),
+                // ★ 여기가 핵심 수정 사항
+                zone: row['구역(4등분)'] || row['구역'] || '미분류',
+                line: row['선로명'] || row['회선명'] || '미분류'
+            };
+        }).filter(item => !isNaN(item.lat) && !isNaN(item.lng)); // 좌표 없는 데이터 제거
 
-// CSV Download Logic (Requirement 4)
-function downloadCSV() {
-    const data = state.visiblePoles;
-    if (data.length === 0) {
-        alert('No data to download.');
-        return;
-    }
+        console.log('데이터 로드 완료:', allData.length, '개');
 
-    // Headers
-    const headers = ['회선명', '전산화번호', '선로명', '선로번호', '구역', '위도', '경도', '주소'];
-
-    // Rows
-    const rows = data.map(p => [
-        p.circuit,
-        p.id,
-        p.line,
-        p.line_num,
-        p.zone,
-        p.lat,
-        p.lng,
-        p.addr
-    ]);
-
-    // CSV Content with BOM for Korean support in Excel
-    const BOM = '\uFEFF';
-    let csvContent = BOM + headers.join(',') + '\n';
-
-    rows.forEach(row => {
-        // Escape commas in data if any
-        const safeRow = row.map(item => {
-            const str = String(item || '');
-            return str.includes(',') ? `"${str}"` : str;
-        });
-        csvContent += safeRow.join(',') + '\n';
-    });
-
-    // Download
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `pole_data_${state.selectedZone}_filtered.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-}
-
-function populateZoneFilter() {
-    const zones = new Set(state.poles.map(p => p.zone).filter(z => z));
-    const select = document.getElementById('zone-select');
-    const sortedZones = Array.from(zones).sort();
-
-    sortedZones.forEach(zone => {
-        const option = document.createElement('option');
-        option.value = zone;
-        option.textContent = zone;
-        select.appendChild(option);
-    });
-}
-
-function updateLineList(searchTerm = '') {
-    let relevantPoles = state.poles;
-    if (state.selectedZone !== 'all') {
-        relevantPoles = relevantPoles.filter(p => p.zone === state.selectedZone);
-    }
-
-    const lines = new Set(relevantPoles.map(p => p.line).filter(l => l));
-    const sortedLines = Array.from(lines).sort();
-    const displayLines = sortedLines.filter(l => l.toLowerCase().includes(searchTerm.toLowerCase()));
-
-    const lineListContainer = document.getElementById('line-list');
-    lineListContainer.innerHTML = '';
-
-    const fragment = document.createDocumentFragment();
-
-    if (displayLines.length === 0) {
-        lineListContainer.innerHTML = '<div style="padding:10px; color:#64748b; font-size:0.9rem;">No lines found</div>';
-        return;
-    }
-
-    displayLines.forEach(line => {
-        const div = document.createElement('div');
-        div.className = 'line-item';
-
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.checked = !state.hiddenLines.has(line);
-        checkbox.dataset.line = line;
-
-        checkbox.addEventListener('change', (e) => {
-            if (e.target.checked) {
-                state.hiddenLines.delete(line);
-            } else {
-                state.hiddenLines.add(line);
-            }
-            applyFilters();
-        });
-
-        const label = document.createElement('span');
-        label.textContent = line;
-
-        div.appendChild(checkbox);
-        div.appendChild(label);
-
-        div.addEventListener('click', (e) => {
-            if (e.target !== checkbox) {
-                checkbox.checked = !checkbox.checked;
-                checkbox.dispatchEvent(new Event('change'));
-            }
-        });
-
-        fragment.appendChild(div);
-    });
-
-    lineListContainer.appendChild(fragment);
-}
-
-
-function applyFilters() {
-    state.visiblePoles = state.poles.filter(p => {
-        if (state.selectedZone !== 'all' && p.zone !== state.selectedZone) return false;
-        if (state.hiddenLines.has(p.line)) return false;
-        return true;
-    });
-
-    renderPoints();
-}
-
-function createPopupContent(cluster) {
-    // Enhanced Popup (Requirement 2)
-    // Table with: 회선명, 전산화번호, 선로번호, 위도, 경도
-    const points = cluster.points;
-
-    let html = `
-        <div class="popup-header">
-            <h3>${cluster.line}</h3>
-        </div>
-        <div class="popup-body custom-scrollbar">
-            <table class="info-table">
-                <thead>
-                    <tr>
-                        <th>회선명</th>
-                        <th>전산화번호</th>
-                        <th>선로번호</th>
-                        <th>위도</th>
-                        <th>경도</th>
-                    </tr>
-                </thead>
-                <tbody>
-    `;
-
-    points.forEach(p => {
-        html += `
-            <tr>
-                <td>${p.circuit}</td>
-                <td>${p.id}</td>
-                <td>${p.line_num}</td>
-                <td>${p.lat.toFixed(6)}</td>
-                <td>${p.lng.toFixed(6)}</td>
-            </tr>
-        `;
-    });
-
-    html += `
-                </tbody>
-            </table>
-        </div>
-    `;
-
-    return html;
-}
-
-function renderPoints() {
-    if (state.layers.clusters) state.map.removeLayer(state.layers.clusters);
-
-    const clusterGroup = L.layerGroup();
-    state.currentClusters = performClustering(state.visiblePoles);
-
-    state.currentClusters.forEach(c => {
-        let size, className, iconHtml;
-
-        if (c.count > 1) {
-            size = Math.min(60, 30 + (c.count * 2));
-            className = 'marker-cluster-custom';
-            iconHtml = `<div class="${className}" style="width:${size}px; height:${size}px;">${c.count}</div>`;
-        } else {
-            // Unified Marker Style (Requirement 3)
-            // Single points also use circle design with number 1
-            size = 30;
-            className = 'marker-single-custom'; // Greenish circle
-            iconHtml = `<div class="${className}" style="width:${size}px; height:${size}px;">1</div>`;
+        // 필터(드롭다운) 만들기
+        initZoneFilter();
+        
+        // 처음에 전체 데이터 보여주기 (또는 1구역 자동 선택)
+        // 여기서는 '전체' 대신 첫 번째 구역을 자동 선택해서 보여줌 (데이터 양이 많으므로)
+        if (allData.length > 0) {
+            const firstZone = document.getElementById('zone-select').options[1].value; // 첫번째 옵션(All 제외)
+            document.getElementById('zone-select').value = firstZone;
+            filterData(firstZone);
         }
 
-        const icon = L.divIcon({
-            html: iconHtml,
-            className: '',
-            iconSize: [size, size]
-        });
-
-        const marker = L.marker([c.lat, c.lng], { icon: icon });
-        const popupContent = createPopupContent(c);
-        marker.bindPopup(popupContent, { maxWidth: 500 });
-
-        clusterGroup.addLayer(marker);
-    });
-
-    state.layers.clusters = clusterGroup;
-    state.map.addLayer(clusterGroup);
-
-    if (state.visiblePoles.length > 0) {
-        const bounds = L.latLngBounds(state.visiblePoles.map(p => [p.lat, p.lng]));
-        state.map.fitBounds(bounds, { padding: [50, 50] });
+    } catch (err) {
+        console.error(err);
+        alert('데이터 로드 중 오류가 발생했습니다.');
     }
-
-    updateStats();
 }
 
-function updateStats() {
-    // Requirement 1: Cluster Count stats
-    document.getElementById('visible-count').textContent = state.visiblePoles.length.toLocaleString();
-    document.getElementById('cluster-count').textContent = state.currentClusters.length.toLocaleString();
+// 7. 구역 필터(드롭다운) 생성
+function initZoneFilter() {
+    // 중복 제거된 구역 목록 만들기
+    const zones = [...new Set(allData.map(d => d.zone))].sort();
+    
+    const select = document.getElementById('zone-select');
+    select.innerHTML = '<option value="all">전체 구역</option>'; // 기본 옵션
+
+    zones.forEach(z => {
+        const option = document.createElement('option');
+        option.value = z;
+        option.textContent = z;
+        select.appendChild(option);
+    });
+
+    // 선택 변경 시 이벤트
+    select.addEventListener('change', (e) => {
+        filterData(e.target.value);
+    });
+}
+
+// 8. 데이터 필터링 및 화면 표시
+function filterData(selectedZone) {
+    let filteredData = allData;
+
+    // 1. 구역 필터링
+    if (selectedZone !== 'all') {
+        filteredData = allData.filter(d => d.zone === selectedZone);
+    }
+
+    // 2. 하단 선로 목록 업데이트
+    updateLineList(filteredData);
+
+    // 3. 지도에 마커 그리기
+    renderMarkers(filteredData);
+}
+
+// 9. 지도에 마커 그리기
+function renderMarkers(data) {
+    markers.clearLayers(); // 기존 마커 싹 지우기
+
+    data.forEach(d => {
+        // 마커 생성
+        const marker = L.marker([d.lat, d.lng], {
+            title: d.line
+        });
+
+        // 클릭 시 말풍선
+        marker.bindPopup(`
+            <div style="text-align:center;">
+                <b>${d.line}</b><br>
+                <span style="font-size:12px; color:#666;">${d.id}</span><br>
+                <span style="font-size:12px; color:#888;">${d.zone}</span>
+            </div>
+        `);
+
+        markers.addLayer(marker);
+    });
+
+    // 마커가 있는 곳으로 지도 이동
+    if (data.length > 0) {
+        map.fitBounds(markers.getBounds());
+    }
+    
+    // 상단 숫자 업데이트
+    document.getElementById('visible-count').textContent = data.length;
+    // 클러스터 수는 계산 딜레이 후 표시
+    setTimeout(() => {
+        document.getElementById('cluster-count').textContent = 'Auto';
+    }, 500);
+}
+
+// 10. 선로 목록(체크박스 리스트) 만들기
+function updateLineList(data) {
+    const listContainer = document.getElementById('line-list');
+    listContainer.innerHTML = ''; // 초기화
+
+    // 현재 구역에 있는 선로명만 뽑기
+    const lines = [...new Set(data.map(d => d.line))].sort();
+
+    lines.forEach(lineName => {
+        const div = document.createElement('div');
+        div.style.padding = '8px';
+        div.style.borderBottom = '1px solid #444';
+        div.style.color = '#eee';
+        div.style.fontSize = '14px';
+        div.innerHTML = `<i class="fa-solid fa-bolt" style="color:#00d2ff; margin-right:8px;"></i> ${lineName}`;
+        
+        // 클릭하면 해당 선로만 지도에 남기기 (심화 기능)
+        div.style.cursor = 'pointer';
+        div.onclick = () => {
+             // 선택된 선로만 다시 필터링해서 지도에 그리기
+             const lineData = data.filter(d => d.line === lineName);
+             renderMarkers(lineData);
+        };
+
+        listContainer.appendChild(div);
+    });
 }
