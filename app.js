@@ -7,7 +7,7 @@ let supabaseClient;
 // App State
 const state = {
     allPoles: [],      // All loaded data
-    visiblePoles: [],  // Filtered data
+    visiblePoles: [],  // Filtered data for map
     selectedZone: '',
     hiddenLines: new Set(),
     map: null,
@@ -21,7 +21,7 @@ const CONFIG = {
     defaultZoom: 13
 };
 
-// --- Color Generator ---
+// --- Helper: Generate Color from String ---
 function stringToColor(str) {
     if (!str) return '#666666';
     let hash = 0;
@@ -34,7 +34,6 @@ function stringToColor(str) {
 
 function getLineColor(lineName) {
     if (!state.lineColors[lineName]) {
-        // Generate a vibrant color for the line
         state.lineColors[lineName] = stringToColor(lineName);
     }
     return state.lineColors[lineName];
@@ -48,7 +47,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
         } else {
             console.error('Supabase lib not found');
-            return;
+            return; // Stop if no lib
         }
     } catch (e) {
         console.error('Init error', e);
@@ -58,7 +57,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 2. Setup Events
     setupEventListeners();
 
-    // 3. Check Session & Start
+    // 3. Auto Login Check & Load
     await checkSession();
 });
 
@@ -88,9 +87,10 @@ function setupEventListeners() {
     if (zoneSelect) {
         zoneSelect.addEventListener('change', (e) => {
             state.selectedZone = e.target.value;
-            state.hiddenLines.clear(); // Clear line filters when zone changes
-            updateLineList(); // Refresh checkboxes for new zone
-            applyFilters();   // Update map
+            // When zone changes, we reset line filters because the lines are different
+            state.hiddenLines.clear();
+            updateLineList();
+            applyFilters();
         });
     }
 
@@ -139,13 +139,14 @@ async function handleLogin(e) {
 async function showApp() {
     document.getElementById('login-modal').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
+
     initMap();
     await loadData();
 }
 
 // --- Map Logic ---
 function initMap() {
-    if (state.map) return;
+    if (state.map) return; // already initialized
 
     state.map = L.map('map').setView(CONFIG.defaultCenter, CONFIG.defaultZoom);
 
@@ -156,11 +157,8 @@ function initMap() {
     }).addTo(state.map);
 
     // Initialize Marker Cluster Group
-    // We use a custom iconCreateFunction if we want to style clusters, 
-    // but default styling is usually fine for "cluster" concept.
-    // For single markers, we will customize.
     state.clusterLayer = L.markerClusterGroup({
-        disableClusteringAtZoom: 18,
+        disableClusteringAtZoom: 18, // Stop clustering at high zoom
         spiderfyOnMaxZoom: true,
         showCoverageOnHover: false
     });
@@ -176,69 +174,74 @@ async function loadData() {
         const { data, error } = await supabaseClient.from('poles').select('*');
         if (error) throw error;
 
-        // Debug Log
+        // Debug Log (Silent)
         if (data.length > 0) {
-            console.log('Sample Data Row:', data[0]);
+            console.log('DB First Row:', data[0]);
+        } else {
+            console.warn('DB Data is empty');
         }
 
-        // 1. Precise Mapping
-        const mapped = data.map(row => {
-            // Zone Mapping Strategy: '구역(4본부)' > '구역' > 'Unknown'
+        // 1. Data Mapping
+        const mappedData = data.map(row => {
+            // Zone Mapping: User specified '구역(4본부)' > '구역'
             let zoneVal = row['구역(4본부)'];
             if (!zoneVal) zoneVal = row['구역'];
-
-            // If still empty, try legacy names just in case, or default
             if (!zoneVal) zoneVal = 'Unknown';
 
+            // Line Mapping: '선로명' (Priority) > '회선명' (Safety)
+            let lineVal = row['선로명'];
+            if (!lineVal) lineVal = row['회선명'];
+            if (!lineVal) lineVal = 'Unknown';
+
             return {
-                id: row['전산화번호'],
+                id: row['전산화번호'] || '',
                 lat: parseFloat(row['위도']),
                 lng: parseFloat(row['경도']),
-                // IMPORTANT: Line = '선로명'
-                line: row['선로명'] || 'Unknown',
+                line: lineVal,
                 zone: zoneVal,
-                // Extra info
-                info: row
+                info: row // Keep original for popup
             };
         });
 
-        // 2. Filter Valid Coords
-        state.allPoles = mapped.filter(p =>
-            !isNaN(p.lat) && !isNaN(p.lng) && p.lat !== 0 && p.lng !== 0
-        );
+        // 2. Filter Invalid Coords
+        state.allPoles = mappedData.filter(p => !isNaN(p.lat) && !isNaN(p.lng) && p.lat !== 0 && p.lng !== 0);
 
-        // 3. Initial Setup
+        console.log(`Loaded ${state.allPoles.length} valid poles.`);
+
+        // 3. UI Setup
         populateZoneSelect();
 
-        // 4. Auto-select first zone
-        const zoneSelect = document.getElementById('zone-select');
-        if (zoneSelect && zoneSelect.options.length > 0) {
-            // Select the first real option (not 'All' if we want to force specific)
-            // User requested: "앱 시작 시 자동으로 첫 번째 구역이 선택되고"
-            // Usually options[0] is often "All" or the first zone.
-            // Let's check populateZoneSelect logic.
-            state.selectedZone = zoneSelect.value;
+        // 4. Auto Select First Zone
+        const select = document.getElementById('zone-select');
+        if (select && select.options.length > 0) {
+            // Ensure we pick a real zone if possible
+            state.selectedZone = select.value;
+            // Trigger updates
             updateLineList();
             applyFilters();
         }
 
     } catch (err) {
         console.error('Data Load Error:', err);
-        alert('데이터 로드 중 오류가 발생했습니다.');
+        alert('데이터 로드 실패. 콘솔을 확인하세요.');
     }
 }
 
-// --- UI Population ---
 function populateZoneSelect() {
+    // Extract unique zones
     const zones = new Set(state.allPoles.map(p => p.zone).filter(z => z && z !== 'Unknown'));
     const sortedZones = Array.from(zones).sort();
 
     const select = document.getElementById('zone-select');
     if (!select) return;
 
-    select.innerHTML = '';
+    select.innerHTML = ''; // Request says dropdown, maybe implicit 'All'?
+    // User Request: '1구역', '2구역' 등을 표시해줘. 
+    // And "앱 시작 시 자동으로 첫 번째 구역이 선택되고" -> implies no 'All' or 'All' is not default.
+    // I will add 'All Zones' as first option just in case, but then select sortedZones[0].
+    // Actually user said "Select first zone", usually meaning a specific zone.
 
-    // Add zones
+    // Let's add specific zones first.
     sortedZones.forEach(z => {
         const opt = document.createElement('option');
         opt.value = z;
@@ -246,7 +249,7 @@ function populateZoneSelect() {
         select.appendChild(opt);
     });
 
-    // If we have zones, ensure one is selected
+    // Select first one if exists
     if (sortedZones.length > 0) {
         select.value = sortedZones[0];
     }
@@ -256,8 +259,10 @@ function updateLineList(searchTerm = '') {
     const listContainer = document.getElementById('line-list');
     if (!listContainer) return;
 
-    // Filter poles by CURRENT selected zone to find available lines
+    // Filter poles by CURRENT Zone
     const zonePoles = state.allPoles.filter(p => p.zone === state.selectedZone);
+
+    // Get unique lines in this zone
     const lines = new Set(zonePoles.map(p => p.line).filter(l => l));
     const sortedLines = Array.from(lines).sort();
 
@@ -266,17 +271,21 @@ function updateLineList(searchTerm = '') {
 
     listContainer.innerHTML = '';
 
+    if (visibleLines.length === 0) {
+        listContainer.innerHTML = '<div style="padding:10px; color:#aaa;">No lines found</div>';
+        return;
+    }
+
     visibleLines.forEach(line => {
         const item = document.createElement('div');
         item.className = 'line-item';
 
-        // Color indicator
         const color = getLineColor(line);
 
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.checked = !state.hiddenLines.has(line);
-        checkbox.className = 'line-checkbox';
+        checkbox.style.accentColor = color;
 
         checkbox.addEventListener('change', (e) => {
             if (e.target.checked) {
@@ -287,23 +296,23 @@ function updateLineList(searchTerm = '') {
             applyFilters();
         });
 
-        const label = document.createElement('span');
-        label.textContent = line;
-        label.style.marginLeft = '8px';
-
+        // Color dot
         const colorDot = document.createElement('span');
         colorDot.style.display = 'inline-block';
-        colorDot.style.width = '10px';
-        colorDot.style.height = '10px';
+        colorDot.style.width = '12px';
+        colorDot.style.height = '12px';
         colorDot.style.borderRadius = '50%';
         colorDot.style.backgroundColor = color;
         colorDot.style.marginRight = '8px';
+        colorDot.style.marginLeft = '5px';
+
+        const label = document.createElement('span');
+        label.textContent = line;
 
         item.appendChild(checkbox);
         item.appendChild(colorDot);
         item.appendChild(label);
 
-        // Click item to toggle
         item.addEventListener('click', (e) => {
             if (e.target !== checkbox) {
                 checkbox.checked = !checkbox.checked;
@@ -315,55 +324,49 @@ function updateLineList(searchTerm = '') {
     });
 }
 
-// --- Filtering & Rendering ---
 function applyFilters() {
-    // Filter logic
+    // Filter visible poles
     state.visiblePoles = state.allPoles.filter(p => {
-        // 1. Zone Filter
+        // Zone check
         if (p.zone !== state.selectedZone) return false;
-        // 2. Line Filter
+        // Hidden line check
         if (state.hiddenLines.has(p.line)) return false;
-
         return true;
     });
 
-    renderMap();
+    renderMarkers();
     updateStats();
 }
 
-function renderMap() {
+function renderMarkers() {
     if (!state.clusterLayer) return;
-
     state.clusterLayer.clearLayers();
 
     const markers = state.visiblePoles.map(p => {
         const color = getLineColor(p.line);
+        const info = p.info || {};
 
-        // Use CircleMarker for better performance and easy coloring
+        // Popup Content
+        const popupContent = `
+            <div style="min-width:200px; font-size:13px;">
+                <Strong style="color:${color}; font-size:14px;">${p.line}</strong><br>
+                <hr style="margin:5px 0; border:0; border-top:1px solid #ddd;">
+                <b>ID:</b> ${p.id}<br>
+                <b>회선:</b> ${info['회선명'] || '-'}<br>
+                <b>주소:</b> ${info['인근주소(참고자료)'] || '-'}<br>
+                <b>구역:</b> ${p.zone}
+            </div>
+        `;
+
+        // Circle Marker
         const marker = L.circleMarker([p.lat, p.lng], {
-            radius: 8,
+            radius: 7,
             fillColor: color,
             color: '#fff',
             weight: 1,
             opacity: 1,
-            fillOpacity: 0.8
+            fillOpacity: 0.9
         });
-
-        const info = p.info || {};
-        const popupContent = `
-            <div style="font-family: 'Inter', sans-serif; font-size: 13px;">
-                <h3 style="margin:0 0 8px 0; color:${color}; border-bottom:1px solid #eee; padding-bottom:5px;">
-                    ${p.line}
-                </h3>
-                <div style="display:grid; grid-template-columns: 80px 1fr; gap: 4px;">
-                    <div style="color:#666;">전산화번호</div><div>${p.id}</div>
-                    <div style="color:#666;">회선명</div><div>${info['회선명'] || '-'}</div>
-                    <div style="color:#666;">선로번호</div><div>${info['선로번호'] || '-'}</div>
-                    <div style="color:#666;">구역</div><div>${p.zone}</div>
-                    <div style="color:#666;">주소</div><div>${info['인근주소(참고자료)'] || info['addr'] || '-'}</div>
-                </div>
-            </div>
-        `;
 
         marker.bindPopup(popupContent);
         return marker;
@@ -371,46 +374,30 @@ function renderMap() {
 
     state.clusterLayer.addLayers(markers);
 
-    // Fit bounds if we have points
-    if (markers.length > 0) { // Removed initialBoundsSet check to auto-fit on filter change
+    // Fit bounds
+    if (markers.length > 0 && state.map) {
         state.map.fitBounds(state.clusterLayer.getBounds(), { padding: [50, 50] });
     }
 }
 
 function updateStats() {
     const vc = document.getElementById('visible-count');
-    // Using clusterLayer to get cluster count is tricky because it depends on zoom.
-    // We can just show total visible poles and maybe "Groups" if desired.
-    // But the user UI has "Clusters".
-    // Leaflet.markerCluster doesn't give a simple "current cluster count" easily without traversing.
-    // Let's just show Visible Poles count for now accurately.
-    // And for Clusters, we can get the getLayers() count, but that's individual markers.
-    // The previous logic calculated custom clusters. 
-    // Let's just update Total Poles for now.
-
     if (vc) vc.textContent = state.visiblePoles.length.toLocaleString();
-
-    // Attempt to count clusters (approximation from visible layers in the group, usually not directly exposed efficiently).
-    // We'll leave Cluster Count as is or set to '-' to avoid confusion if we can't get it easily.
-    // Or we keep the UI element but update it with something else? 
-    // Let's try to just update visible poles.
 }
 
-// --- CSV Download ---
 function downloadCSV() {
     if (state.visiblePoles.length === 0) {
         return;
     }
 
-    const headers = ['구역', '선로명', '회선명', '전산화번호', '선로번호', '위도', '경도', '주소'];
+    // Columns: Zone, Line, ID, Lat, Lng
+    const headers = ['구역', '선로명', '전산화번호', '위도', '경도', '주소'];
     const rows = state.visiblePoles.map(p => {
         const info = p.info || {};
         return [
             p.zone,
             p.line,
-            info['회선명'] || '',
             p.id,
-            info['선로번호'] || '',
             p.lat,
             p.lng,
             info['인근주소(참고자료)'] || ''
@@ -432,7 +419,7 @@ function downloadCSV() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `poles_${state.selectedZone}.csv`);
+    link.setAttribute('download', 'pole_data_export.csv');
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
