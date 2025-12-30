@@ -6,22 +6,21 @@ let supabaseClient;
 
 // App State
 const state = {
-    allPoles: [],      // All loaded data
-    visiblePoles: [],  // Filtered data for map
+    allPoles: [],      // All data from DB
+    visiblePoles: [],  // Filtered for map
     selectedZone: '',
     hiddenLines: new Set(),
     map: null,
     clusterLayer: null,
-    lineColors: {}     // Cache for line colors
+    lineColors: {}     // Color cache
 };
 
-// Configuration
 const CONFIG = {
     defaultCenter: [37.45, 126.85],
     defaultZoom: 13
 };
 
-// --- Helper: Generate Color from String ---
+// --- Utils: Color Generation ---
 function stringToColor(str) {
     if (!str) return '#666666';
     let hash = 0;
@@ -39,25 +38,21 @@ function getLineColor(lineName) {
     return state.lineColors[lineName];
 }
 
-// --- Main Initialization ---
+// --- Main Init ---
 document.addEventListener('DOMContentLoaded', async () => {
-    // 1. Initialize Supabase
     try {
         if (typeof supabase !== 'undefined' && supabase.createClient) {
             supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
         } else {
             console.error('Supabase lib not found');
-            return; // Stop if no lib
+            return;
         }
     } catch (e) {
         console.error('Init error', e);
         return;
     }
 
-    // 2. Setup Events
     setupEventListeners();
-
-    // 3. Auto Login Check & Load
     await checkSession();
 });
 
@@ -75,6 +70,7 @@ async function checkSession() {
     }
 }
 
+// --- Event Listeners ---
 function setupEventListeners() {
     // Login
     const loginBtn = document.getElementById('login-btn');
@@ -87,8 +83,7 @@ function setupEventListeners() {
     if (zoneSelect) {
         zoneSelect.addEventListener('change', (e) => {
             state.selectedZone = e.target.value;
-            // When zone changes, we reset line filters because the lines are different
-            state.hiddenLines.clear();
+            state.hiddenLines.clear(); // Reset line filters
             updateLineList();
             applyFilters();
         });
@@ -146,7 +141,7 @@ async function showApp() {
 
 // --- Map Logic ---
 function initMap() {
-    if (state.map) return; // already initialized
+    if (state.map) return;
 
     state.map = L.map('map').setView(CONFIG.defaultCenter, CONFIG.defaultZoom);
 
@@ -156,9 +151,9 @@ function initMap() {
         maxZoom: 20
     }).addTo(state.map);
 
-    // Initialize Marker Cluster Group
+    // Marker Cluster
     state.clusterLayer = L.markerClusterGroup({
-        disableClusteringAtZoom: 18, // Stop clustering at high zoom
+        disableClusteringAtZoom: 18,
         spiderfyOnMaxZoom: true,
         showCoverageOnHover: false
     });
@@ -166,7 +161,7 @@ function initMap() {
     state.map.addLayer(state.clusterLayer);
 }
 
-// --- Data Loading & Processing ---
+// --- Data Logic ---
 async function loadData() {
     if (!supabaseClient) return;
 
@@ -174,74 +169,65 @@ async function loadData() {
         const { data, error } = await supabaseClient.from('poles').select('*');
         if (error) throw error;
 
-        // Debug Log (Silent)
+        // Debug: Log raw data to confirm columns
         if (data.length > 0) {
-            console.log('DB First Row:', data[0]);
-        } else {
-            console.warn('DB Data is empty');
+            console.log('Load Data Success. First Row:', data[0]);
         }
 
-        // 1. Data Mapping
+        // 1. Precise Mapping (Based on User's DB Screenshot)
         const mappedData = data.map(row => {
-            // Zone Mapping: User specified '구역(4본부)' > '구역'
-            let zoneVal = row['구역(4본부)'];
-            if (!zoneVal) zoneVal = row['구역'];
-            if (!zoneVal) zoneVal = 'Unknown';
+            // Zone: '구역(4등분)'
+            const zoneVal = row['구역(4등분)'] || 'Unknown';
 
-            // Line Mapping: '선로명' (Priority) > '회선명' (Safety)
-            let lineVal = row['선로명'];
-            if (!lineVal) lineVal = row['회선명'];
-            if (!lineVal) lineVal = 'Unknown';
+            // Line: '선로명'
+            const lineVal = row['선로명'] || 'Unknown';
 
             return {
                 id: row['전산화번호'] || '',
                 lat: parseFloat(row['위도']),
                 lng: parseFloat(row['경도']),
-                line: lineVal,
                 zone: zoneVal,
-                info: row // Keep original for popup
+                line: lineVal,
+                // Extra info (Circuit name, etc)
+                circuit: row['회선명'] || '',
+                info: row
             };
         });
 
-        // 2. Filter Invalid Coords
-        state.allPoles = mappedData.filter(p => !isNaN(p.lat) && !isNaN(p.lng) && p.lat !== 0 && p.lng !== 0);
+        // 2. Filter Valid Coords
+        state.allPoles = mappedData.filter(p =>
+            !isNaN(p.lat) && !isNaN(p.lng) && p.lat !== 0 && p.lng !== 0
+        );
 
-        console.log(`Loaded ${state.allPoles.length} valid poles.`);
+        console.log(`Valid Poles Parsed: ${state.allPoles.length}`);
 
-        // 3. UI Setup
+        // 3. UI Init
         populateZoneSelect();
 
-        // 4. Auto Select First Zone
+        // 4. Auto-select first zone to show data immediately
         const select = document.getElementById('zone-select');
         if (select && select.options.length > 0) {
-            // Ensure we pick a real zone if possible
             state.selectedZone = select.value;
-            // Trigger updates
             updateLineList();
             applyFilters();
         }
 
     } catch (err) {
         console.error('Data Load Error:', err);
-        alert('데이터 로드 실패. 콘솔을 확인하세요.');
+        alert('데이터 로드 실패 (콘솔 확인)');
     }
 }
 
 function populateZoneSelect() {
-    // Extract unique zones
+    // Get unique zones
     const zones = new Set(state.allPoles.map(p => p.zone).filter(z => z && z !== 'Unknown'));
     const sortedZones = Array.from(zones).sort();
 
     const select = document.getElementById('zone-select');
     if (!select) return;
 
-    select.innerHTML = ''; // Request says dropdown, maybe implicit 'All'?
-    // User Request: '1구역', '2구역' 등을 표시해줘. 
-    // And "앱 시작 시 자동으로 첫 번째 구역이 선택되고" -> implies no 'All' or 'All' is not default.
-    // I will add 'All Zones' as first option just in case, but then select sortedZones[0].
-    // Actually user said "Select first zone", usually meaning a specific zone.
+    select.innerHTML = '';
 
-    // Let's add specific zones first.
     sortedZones.forEach(z => {
         const opt = document.createElement('option');
         opt.value = z;
@@ -249,7 +235,7 @@ function populateZoneSelect() {
         select.appendChild(opt);
     });
 
-    // Select first one if exists
+    // Default select first
     if (sortedZones.length > 0) {
         select.value = sortedZones[0];
     }
@@ -259,14 +245,14 @@ function updateLineList(searchTerm = '') {
     const listContainer = document.getElementById('line-list');
     if (!listContainer) return;
 
-    // Filter poles by CURRENT Zone
+    // Filter poles by CURRENT Zone first
     const zonePoles = state.allPoles.filter(p => p.zone === state.selectedZone);
 
-    // Get unique lines in this zone
-    const lines = new Set(zonePoles.map(p => p.line).filter(l => l));
+    // Get unique lines within this zone
+    const lines = new Set(zonePoles.map(p => p.line).filter(l => l && l !== 'Unknown'));
     const sortedLines = Array.from(lines).sort();
 
-    // Filter by search term
+    // Search filter
     const visibleLines = sortedLines.filter(l => l.toLowerCase().includes(searchTerm.toLowerCase()));
 
     listContainer.innerHTML = '';
@@ -296,7 +282,7 @@ function updateLineList(searchTerm = '') {
             applyFilters();
         });
 
-        // Color dot
+        // Color indicator
         const colorDot = document.createElement('span');
         colorDot.style.display = 'inline-block';
         colorDot.style.width = '12px';
@@ -325,12 +311,12 @@ function updateLineList(searchTerm = '') {
 }
 
 function applyFilters() {
-    // Filter visible poles
     state.visiblePoles = state.allPoles.filter(p => {
-        // Zone check
+        // Zone Match
         if (p.zone !== state.selectedZone) return false;
-        // Hidden line check
+        // Hidden Line Check
         if (state.hiddenLines.has(p.line)) return false;
+
         return true;
     });
 
@@ -346,15 +332,18 @@ function renderMarkers() {
         const color = getLineColor(p.line);
         const info = p.info || {};
 
-        // Popup Content
+        // Popup
         const popupContent = `
-            <div style="min-width:200px; font-size:13px;">
-                <Strong style="color:${color}; font-size:14px;">${p.line}</strong><br>
-                <hr style="margin:5px 0; border:0; border-top:1px solid #ddd;">
-                <b>ID:</b> ${p.id}<br>
-                <b>회선:</b> ${info['회선명'] || '-'}<br>
-                <b>주소:</b> ${info['인근주소(참고자료)'] || '-'}<br>
-                <b>구역:</b> ${p.zone}
+            <div style="font-family:'Inter', sans-serif; font-size:13px; min-width:180px;">
+                <h3 style="margin:0 0 8px 0; color:${color}; border-bottom:1px solid #ddd; padding-bottom:5px;">
+                    ${p.line}
+                </h3>
+                <div style="line-height:1.6;">
+                    <b>ID:</b> ${p.id}<br>
+                    <b>회선명:</b> ${p.circuit}<br>
+                    <b>구역:</b> ${p.zone}<br>
+                    <b>주소:</b> ${info['인근주소(참고자료)'] || '-'}
+                </div>
             </div>
         `;
 
@@ -374,7 +363,6 @@ function renderMarkers() {
 
     state.clusterLayer.addLayers(markers);
 
-    // Fit bounds
     if (markers.length > 0 && state.map) {
         state.map.fitBounds(state.clusterLayer.getBounds(), { padding: [50, 50] });
     }
@@ -382,21 +370,21 @@ function renderMarkers() {
 
 function updateStats() {
     const vc = document.getElementById('visible-count');
+    const cc = document.getElementById('cluster-count');
     if (vc) vc.textContent = state.visiblePoles.length.toLocaleString();
+    if (cc) cc.textContent = '-'; // Calculation complex with MarkerCluster, simplify for now
 }
 
 function downloadCSV() {
-    if (state.visiblePoles.length === 0) {
-        return;
-    }
+    if (state.visiblePoles.length === 0) return;
 
-    // Columns: Zone, Line, ID, Lat, Lng
-    const headers = ['구역', '선로명', '전산화번호', '위도', '경도', '주소'];
+    const headers = ['구역', '선로명', '회선명', '전산화번호', '위도', '경도', '주소'];
     const rows = state.visiblePoles.map(p => {
         const info = p.info || {};
         return [
             p.zone,
             p.line,
+            p.circuit,
             p.id,
             p.lat,
             p.lng,
@@ -419,7 +407,7 @@ function downloadCSV() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', 'pole_data_export.csv');
+    link.setAttribute('download', 'poles_export.csv');
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
