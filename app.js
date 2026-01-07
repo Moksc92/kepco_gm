@@ -154,7 +154,7 @@ async function loadData() {
         zone: item['구역(4등분)'] || item.zone || item.구역 || 'Unknown',
         line: item.line || item.선로명 || 'Unknown',
         id: item.pole_id || item.전산화번호 || '',
-        addr: item.address || item.주소 || '',
+        addr: item.address || item.주소 || item['인근주소(참고자료)'] || '',
         circuit: item.circuit || item.회선명 || '',
         line_num: item.line_num || item.선로번호 || ''
     }));
@@ -177,7 +177,7 @@ function initMap() {
     renderPoints();
 
     setupAppEventListeners();
-    
+
     // 맵 사이즈 강제 재조정 (UI 깨짐 방지)
     setTimeout(() => {
         state.map.invalidateSize();
@@ -197,34 +197,45 @@ function setupAppEventListeners() {
     });
 
     const downloadBtn = document.getElementById('btn-download');
-    if(downloadBtn) {
+    if (downloadBtn) {
         downloadBtn.addEventListener('click', downloadCSV);
     }
 
     const logoutBtn = document.getElementById('btn-logout');
-    if(logoutBtn) {
+    if (logoutBtn) {
         logoutBtn.addEventListener('click', handleLogout);
     }
 }
 
 function downloadCSV() {
-    const data = state.visiblePoles;
-    if (data.length === 0) {
+    // Generate data from current clusters to ensure 'Clustering Address' is correct
+    const clusters = state.currentClusters;
+    if (clusters.length === 0) {
         alert('No data to download.');
         return;
     }
 
-    const headers = ['회선명', '전산화번호', '선로명', '선로번호', '구역', '위도', '경도', '주소'];
-    const rows = data.map(p => [
-        p.circuit,
-        p.id,
-        p.line,
-        p.line_num,
-        p.zone,
-        p.lat,
-        p.lng,
-        p.addr
-    ]);
+    const headers = ['클러스터링주소', '회선명', '전산화번호', '선로명', '선로번호', '구역', '위도', '경도', '주소'];
+    const rows = [];
+
+    clusters.forEach(cluster => {
+        // Representative address for the cluster
+        const clusterAddress = cluster.points.length > 0 ? (cluster.points[0].addr || '주소 없음') : '정보 없음';
+
+        cluster.points.forEach(p => {
+            rows.push([
+                clusterAddress, // New Column
+                p.circuit,
+                p.id,
+                p.line,
+                p.line_num,
+                p.zone,
+                p.lat,
+                p.lng,
+                p.addr
+            ]);
+        });
+    });
 
     const BOM = '\uFEFF';
     let csvContent = BOM + headers.join(',') + '\n';
@@ -252,7 +263,7 @@ function populateZoneFilter() {
     const zones = new Set(state.poles.map(p => p.zone).filter(z => z && z !== 'Unknown'));
     const select = document.getElementById('zone-select');
     select.innerHTML = '<option value="all">All Zones</option>';
-    
+
     // 정렬 (1구역, 2구역 순)
     const sortedZones = Array.from(zones).sort();
 
@@ -288,7 +299,7 @@ function updateLineList(searchTerm = '') {
 
     sortedZones.forEach(zone => {
         // ★ [핵심 수정 2] Unknown 구역 헤더 및 내용 숨기기
-        if (zone === 'Unknown') return; 
+        if (zone === 'Unknown') return;
 
         // Collect Lines for this zone
         const lines = Array.from(groupedLines[zone]).sort();
@@ -351,7 +362,7 @@ function applyFilters() {
         if (state.selectedZone !== 'all' && p.zone !== state.selectedZone) return false;
         if (state.hiddenLines.has(p.line)) return false;
         // Unknown 구역도 리스트에서 뺐으므로 지도에서도 숨김 (선택 사항)
-        if (p.zone === 'Unknown') return false; 
+        if (p.zone === 'Unknown') return false;
         return true;
     });
 
@@ -360,9 +371,11 @@ function applyFilters() {
 
 function createPopupContent(cluster) {
     const points = cluster.points;
+    const topAddress = points.length > 0 ? (points[0].addr || '주소 없음') : '정보 없음';
+
     let html = `
         <div class="popup-header">
-            <h3>${cluster.line}</h3>
+            <h3>${topAddress}</h3>
         </div>
         <div class="popup-body custom-scrollbar">
             <table class="info-table">
@@ -373,6 +386,7 @@ function createPopupContent(cluster) {
                         <th>선로번호</th>
                         <th>위도</th>
                         <th>경도</th>
+                        <th>주소</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -386,6 +400,7 @@ function createPopupContent(cluster) {
                 <td>${p.line_num}</td>
                 <td>${p.lat.toFixed(6)}</td>
                 <td>${p.lng.toFixed(6)}</td>
+                <td>${p.addr}</td>
             </tr>
         `;
     });
@@ -426,7 +441,7 @@ function renderPoints() {
 
         const marker = L.marker([c.lat, c.lng], { icon: icon });
         const popupContent = createPopupContent(c);
-        marker.bindPopup(popupContent, { maxWidth: 500 });
+        marker.bindPopup(popupContent, { maxWidth: 900 });
 
         clusterGroup.addLayer(marker);
     });
@@ -445,6 +460,6 @@ function renderPoints() {
 function updateStats() {
     const visibleEl = document.getElementById('visible-count');
     const clusterEl = document.getElementById('cluster-count');
-    if(visibleEl) visibleEl.textContent = state.visiblePoles.length.toLocaleString();
-    if(clusterEl) clusterEl.textContent = state.currentClusters.length.toLocaleString();
+    if (visibleEl) visibleEl.textContent = state.visiblePoles.length.toLocaleString();
+    if (clusterEl) clusterEl.textContent = state.currentClusters.length.toLocaleString();
 }
