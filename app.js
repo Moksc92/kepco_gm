@@ -156,7 +156,8 @@ async function loadData() {
         id: item.pole_id || item.전산화번호 || '',
         addr: item.address || item.주소 || item['인근주소(참고자료)'] || '',
         circuit: item.circuit || item.회선명 || '',
-        line_num: item.line_num || item.선로번호 || ''
+        line_num: item.line_num || item.선로번호 || '',
+        removal_status: item['철거예정전주'] || ''
     }));
 
     // 유효한 좌표만 필터링
@@ -215,7 +216,7 @@ function downloadCSV() {
         return;
     }
 
-    const headers = ['클러스터링주소', '회선명', '전산화번호', '선로명', '선로번호', '구역', '위도', '경도', '주소'];
+    const headers = ['클러스터링주소', '회선명', '전산화번호', '선로명', '선로번호', '구역', '위도', '경도', '주소', '철거예정전주'];
     const rows = [];
 
     clusters.forEach(cluster => {
@@ -232,7 +233,8 @@ function downloadCSV() {
                 p.zone,
                 p.lat,
                 p.lng,
-                p.addr
+                p.addr,
+                p.removal_status
             ]);
         });
     });
@@ -387,6 +389,7 @@ function createPopupContent(cluster) {
                         <th>위도</th>
                         <th>경도</th>
                         <th>주소</th>
+                        <th>철거</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -401,6 +404,7 @@ function createPopupContent(cluster) {
                 <td>${p.lat.toFixed(6)}</td>
                 <td>${p.lng.toFixed(6)}</td>
                 <td>${p.addr}</td>
+                <td>${p.removal_status}</td>
             </tr>
         `;
     });
